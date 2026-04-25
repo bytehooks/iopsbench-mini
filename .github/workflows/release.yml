@@ -1,0 +1,95 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.goos }}-${{ matrix.goarch }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          # macOS Intel (AMD64) — built on Apple Silicon runner with cross-compilation
+          - os: macos-latest
+            goos: darwin
+            goarch: amd64
+            cgo: '1'
+            ext: ''
+
+          # macOS Apple Silicon (ARM64) — native build
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+            cgo: '1'
+            ext: ''
+
+          # Linux AMD64 — native build with OpenCL
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            cgo: '1'
+            ext: ''
+            deps: sudo apt-get update && sudo apt-get install -y ocl-icd-opencl-dev
+
+          # Linux ARM64 — cross-compiled without CGO (disk benchmarks only)
+          - os: ubuntu-latest
+            goos: linux
+            goarch: arm64
+            cgo: '0'
+            ext: ''
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Install dependencies
+        if: matrix.deps != ''
+        run: ${{ matrix.deps }}
+
+      - name: Build binary
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          output="iopsbench-mini-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}"
+          CGO_ENABLED=${{ matrix.cgo }} GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+            go build -ldflags "-X iopsbench-mini/internal/version.Version=${VERSION}" \
+            -o "${output}"
+          echo "Built ${output}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: iopsbench-mini-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: iopsbench-mini-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten artifacts for upload
+        run: |
+          mkdir -p dist
+          find artifacts -type f -exec cp {} dist/ \;
+          ls -la dist/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
